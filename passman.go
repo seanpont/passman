@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	_"log"
+	"encoding/json"
 	"os"
 	"github.com/seanpont/ergo"
 )
@@ -38,22 +38,29 @@ func main() {
 func printHelp() {
 	// write man.txt to console
 	manual, err := ioutil.ReadFile("man.txt")
-	ergo.Check(err)	
+	ergo.CheckNil(err)	
 	fmt.Println(string(manual))
 }
 
 func promptForPassword() (password string) {
 	password, err := gopass.GetPass("Password: ")
-	ergo.Check(err)
+	ergo.CheckNil(err)
 	return
 }
 
 type PasswordEntry struct {
-	service, password string
+	Service, Password string
 }
 
 func readPasswordFile(reader io.Reader) ([]PasswordEntry, error) {
-	return nil, nil	
+	pwEntries := make([]PasswordEntry, 0)
+	if reader == nil { return pwEntries, nil }
+	err := json.NewDecoder(reader).Decode(&pwEntries)	
+	return pwEntries, err	
+}
+
+func writePwFile(writer io.Writer, pwEntries []PasswordEntry) error {
+	return json.NewEncoder(writer).Encode(pwEntries)
 }
 
 func addPassword(service, servicePassword string) {
