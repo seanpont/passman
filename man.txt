@@ -1,0 +1,7 @@
+Help contents
+
+add <service_name> <password> : adds password to password store
+
+<service_name> : copies the password to the clipboard
+
+-p : print the password to the console
