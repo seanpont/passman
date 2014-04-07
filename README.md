@@ -1,11 +1,7 @@
-GoPass Password Manager
-=======================
+=======
+passman
+=======
 
-How it works:
--------------
-
-- Passwords are stored in an AES 512 - encrypted file in your home directory
-- 
-
+A Password Manager that happens to be written in Go
 
 
