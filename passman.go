@@ -2,7 +2,7 @@ package main
 
 import (
 	"code.google.com/p/gopass"
-	_ "crypto/aes"
+	"crypto/aes"
 	_ "flag"
 	"fmt"
 	"io"
@@ -29,7 +29,7 @@ func main() {
 			return
 		}
 		service, servicePassword := os.Args[2], os.Args[3]
-		addPassword(service, servicePassword)
+		addPassword(service, servicePassword, promptForPassword())
 	} else {
 		getPassword(firstArg)
 	}
@@ -52,7 +52,7 @@ type PasswordEntry struct {
 	Service, Password string
 }
 
-func readPasswordFile(reader io.Reader) ([]PasswordEntry, error) {
+func readPwFile(reader io.Reader) ([]PasswordEntry, error) {
 	pwEntries := make([]PasswordEntry, 0)
 	if reader == nil { return pwEntries, nil }
 	err := json.NewDecoder(reader).Decode(&pwEntries)	
@@ -63,10 +63,35 @@ func writePwFile(writer io.Writer, pwEntries []PasswordEntry) error {
 	return json.NewEncoder(writer).Encode(pwEntries)
 }
 
-func addPassword(service, servicePassword string) {
-	fmt.Println("adding some passwords")
+func addPassword(service, servicePassword, password string) {
+	fmt.Println("adding a password")
+	encryptedPw, _ := encryptPassword(service, servicePassword, password)
+	fmt.Printf("Encrypted password: %v\n", encryptedPw)
 }
 
 func getPassword(service string) {
 	fmt.Printf("getting password for service: %s\n", service)
 }
+
+// Returns a []byte of length 32
+func padKey(key string) []byte {
+	padded := []byte(key)
+	if len(padded) >= 32 {
+		return padded[:32]
+	}
+	padding := make([]byte, 32-len(padded))
+	return append(padded, padding...)
+}
+
+func encryptPassword(salt, password, encryptionKey string) ([]byte, error) {
+	paddedKey := padKey(encryptionKey)
+	
+	_, err := aes.NewCipher(paddedKey)
+	if err != nil { return nil, err }
+	
+	return nil, nil
+}
+
+
+
+
