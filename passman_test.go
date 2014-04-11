@@ -8,29 +8,35 @@ import (
 	"github.com/seanpont/assert"
 )
 
-func TestPadKey(t *testing.T) {
+func TestPad(t *testing.T) {
 	assert := assert.Assert(t)
-	key := "this is a short key"
-	assert.True(len(key) < 32, "bad length")
-	padded := padKey(key)
-	assert.Equal(len(padded), 32)
 
-	// Longer keys are trimmed
-	key = "this is a long key the length of which is over 32 bytes"
-	assert.True(len(key) > 32, "long key not long enough")
-	padded = padKey(key)
-	assert.Equal(len(padded), 32)
+	// len < n
+	key := "abc"
+	padded := pad(key, 4)
+	assert.Equal(len(padded), 4)
+
+	// len == n
+	key = "asdf"
+	padded = pad(key, 4)
+	assert.Equal(padded, []byte(key))
+
+	// len > n
+	key = "asdfa"
+	padded = pad(key, 4)
+	assert.Equal(len(padded), 8)
 }
 
-func TestEncryptPassword(t *testing.T) {
+func TestEncryptAndDecrypt(t *testing.T) {
 	assert := assert.Assert(t)
 	// encryption works
-	salt, pw, key := "salt", "secret", "key"
+	key, plaintext := "secret key", "Some very important text"
+	ciphertext := encrypt(plaintext, key)
 	
-	encrypted, _ := encryptPassword(salt, pw, key)
-	fmt.Println(encrypted)
-	assert.NotNil(encrypted)
+	fmt.Printf("ciphertext: %s", ciphertext)
+	plaintext2 := decrypt(ciphertext, key)
 
+	assert.Equal(plaintext, plaintext2)
 }
 
 func TestReadPasswordFile(t *testing.T) {
