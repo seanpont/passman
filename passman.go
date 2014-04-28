@@ -11,7 +11,8 @@ import (
 	"github.com/seanpont/ergo"
 	"io"
 	"io/ioutil"
-	_ "os"
+	_ "log"
+	"os"
 	"os/user"
 )
 
@@ -22,11 +23,10 @@ func main() {
 	currentUser, err := user.Current()
 	ergo.CheckNil(err)
 	filename := currentUser.HomeDir + "/.passman"
-	fmt.Println("filename: " + filename)
 
 	init := flag.Bool("init", false, "Create a new .passman file")
 	addService := flag.String("add", "", "Add a password")
-	addServicePassword := flag.String("-p", "", "password to add")
+	addServicePassword := flag.String("p", "", "password to add")
 	getService := flag.String("get", "", "Get a password")
 
 	flag.Parse()
@@ -37,12 +37,18 @@ func main() {
 	}
 
 	pw := promptForPassword()
-	pwEntries := load(filename, pw)
 
 	if *init {
+		if fileExists(filename) {
+			fmt.Printf("File %s already exists\n", filename)
+			return
+		}
+		pwEntries := make(map[string]string)
 		save(filename, pwEntries, pw)
 		return
 	}
+
+	pwEntries := load(filename, pw)
 
 	if *addService != "" {
 		servicePassword := *addServicePassword
@@ -86,6 +92,11 @@ func save(filename string, pwEntries map[string]string, pw string) {
 	writeToDisk(filename, encrypt(encode(pwEntries), pw))
 }
 
+func fileExists(filename string) bool {
+	_, err := os.Stat(filename)
+	return !os.IsNotExist(err)
+}
+
 func encode(data map[string]string) []byte {
 	if data == nil {
 		data = make(map[string]string)
@@ -97,7 +108,11 @@ func encode(data map[string]string) []byte {
 
 func decode(data []byte) map[string]string {
 	m := make(map[string]string)
-	json.Unmarshal(data, &m)
+	err := json.Unmarshal(data, &m)
+	if err != nil {
+		fmt.Printf("Could not decode %s\n", data)
+		panic(err)
+	}
 	return m
 }
 
@@ -108,9 +123,7 @@ func writeToDisk(filename string, data []byte) {
 
 func readFromDisk(filename string) []byte {
 	data, err := ioutil.ReadFile(filename)
-	if err != nil {
-		return nil
-	}
+	ergo.CheckNil(err)
 	return data
 }
 
@@ -151,7 +164,7 @@ func decrypt(ciphertext []byte, key string) []byte {
 	}
 
 	if len(ciphertext) < aes.BlockSize {
-		return nil
+		panic("Unable to decrypt -- ciphertext is too short!")
 	}
 
 	iv := ciphertext[:aes.BlockSize]
