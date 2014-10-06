@@ -1,79 +1,37 @@
 package main
 
 import (
-	"fmt"
-	_"io/ioutil"
-	"bytes"
-	"testing"
+	_ "bytes"
+	_ "fmt"
 	"github.com/seanpont/assert"
+	_ "io/ioutil"
+	"testing"
 )
 
-func TestPad(t *testing.T) {
+func TestServices(t *testing.T) {
 	assert := assert.Assert(t)
+	services := new(Services)
+	assert.Equal(len(services.Services), 0)
 
-	// len < n
-	key := "abc"
-	padded := pad(key, 4)
-	assert.Equal(len(padded), 4)
+	// Addition
+	s1 := Service{Name: "google.com", Password: "asdf1234", Meta: "Personal"}
+	services.Put(&s1)
+	assert.Equal(len(services.Services), 1)
+	assert.Equal(services.Services[0].Name, "google.com")
 
-	// len == n
-	key = "asdf"
-	padded = pad(key, 4)
-	assert.Equal(padded, []byte(key))
+	// replacement
+	s2 := Service{Name: "google.com", Password: "lkjpoiu"}
+	services.Put(&s2)
+	assert.Equal(len(services.Services), 1)
+	assert.Equal(services.Services[0].Password, s2.Password)
 
-	// len > n
-	key = "asdfa"
-	padded = pad(key, 4)
-	assert.Equal(len(padded), 8)
+	// Addition
+	s3 := Service{Name: "facebook.com", Password: "1234"}
+	services.Put(&s3)
+
+	// another replacement
+	s1.Password = "84824"
+	services.Put(&s1)
+	assert.Equal(services.Get("google.com").Password, s1.Password)
+	assert.Equal(len(services.Services), 2)
 }
-
-func TestEncryptAndDecrypt(t *testing.T) {
-	assert := assert.Assert(t)
-	// encryption works
-	key, plaintext := "secret key", "Some very important text"
-	ciphertext := encrypt(plaintext, key)
-	
-	fmt.Printf("ciphertext: %s", ciphertext)
-	plaintext2 := decrypt(ciphertext, key)
-
-	assert.Equal(plaintext, plaintext2)
-}
-
-func TestReadPasswordFile(t *testing.T) {
-	assert := assert.Assert(t)
-	// passing nil returns an empty list
-	pwEntries, err := readPwFile(nil)
-	assert.Nil(err)
-	assert.Equal(pwEntries, make([]PasswordEntry, 0))
-	
-	// happy case: one entry
-	pwEntries = make([]PasswordEntry, 0)
-	pwEntries = append(pwEntries, PasswordEntry{"github", "asdfasdf"})
-	buffer := new(bytes.Buffer)
-	err = writePwFile(buffer, pwEntries)
-	// fmt.Println(ioutil.ReadAll(&buffer))
-	pwEntries, err = readPwFile(buffer)
-	assert.Equal(len(pwEntries), 1)
-
-	// two entries
-	pwEntries = append(pwEntries, PasswordEntry{"google", "fdsfdsaf"})
-	buffer = new(bytes.Buffer)
-	err = writePwFile(buffer, pwEntries)
-	assert.Nil(err)
-	pwEntries, err = readPwFile(buffer)
-	assert.Nil(err)
-	assert.Equal(len(pwEntries), 2)
-
-	// does not barf on unknown keys
-	badJson := "[{\"Stuff\": \"Bland\"}]"
-	pwEntries, err = readPwFile(bytes.NewBufferString(badJson))
-	assert.Equal(len(pwEntries), 1)
-	assert.Nil(err)
-
-	// truly malformed returns empty array and error
-	badJson = "asdfasdfg-\""
-	pwEntries, err = readPwFile(bytes.NewBufferString(badJson))
-	assert.Equal(len(pwEntries), 0)
-	assert.NotNil(err)
-}
-

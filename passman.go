@@ -1,177 +1,211 @@
 package main
 
 import (
+	"bytes"
+	"code.google.com/p/go.crypto/blowfish"
 	"code.google.com/p/gopass"
-	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
-	"flag"
 	"fmt"
-	"github.com/seanpont/ergo"
-	"io"
+	"github.com/seanpont/gobro"
 	"io/ioutil"
-	_ "log"
 	"os"
 	"os/user"
+	_ "strings"
 )
 
-const KEY_LENGTH = 32
+// ===== CONFIGURATION =======================================================
 
-func main() {
+type Config struct {
+	PasswdDir string
+}
 
-	currentUser, err := user.Current()
-	ergo.CheckNil(err)
-	filename := currentUser.HomeDir + "/.passman"
+func configFileName() string {
+	u, err := user.Current()
+	gobro.CheckErr(err)
+	return u.HomeDir + "/.passman-config"
+}
 
-	init := flag.Bool("init", false, "Create a new .passman file")
-	addService := flag.String("add", "", "Add a password")
-	addServicePassword := flag.String("p", "", "password to add")
-	getService := flag.String("get", "", "Get a password")
+func loadConfig() (*Config, error) {
+	configFile, err := os.Open(configFileName())
+	if err != nil {
+		return nil, err
+	}
+	defer configFile.Close()
+	var config Config
+	err = json.NewDecoder(configFile).Decode(&config)
+	return &config, err
+}
 
-	flag.Parse()
+func saveConfig(config *Config) error {
+	configFile, err := os.Create(configFileName())
+	if err != nil {
+		return err
+	}
+	defer configFile.Close()
+	json.NewEncoder(configFile).Encode(config)
+	return nil
+}
 
-	if !*init && *addService == "" && *getService == "" {
-		flag.PrintDefaults()
-		return
+func configure(args []string) {
+	config, err := loadConfig()
+	if err != nil {
+		fmt.Println("Config file not found")
+		config = new(Config)
 	}
 
-	pw := promptForPassword()
+	d := gobro.IndexOf(args, "-d")
+	if d >= 0 && len(args) > d {
+		config.PasswdDir = args[d+1]
+	}
+	saveConfig(config)
+}
 
-	if *init {
-		if fileExists(filename) {
-			fmt.Printf("File %s already exists\n", filename)
-			return
+// ===== PASSWORD MANAGEMENT =================================================
+
+type Service struct {
+	Name, Password, Meta string
+}
+
+type Services struct {
+	Services []Service
+}
+
+func (s *Services) IndexOf(name string) int {
+	for i, service := range s.Services {
+		if service.Name == name {
+			return i
 		}
-		pwEntries := make(map[string]string)
-		save(filename, pwEntries, pw)
-		return
 	}
-
-	pwEntries := load(filename, pw)
-
-	if *addService != "" {
-		servicePassword := *addServicePassword
-		if servicePassword == "" {
-			servicePassword = promptForPassword()
-		}
-		pwEntries[*addService] = servicePassword
-		fmt.Println(pwEntries)
-		save(filename, pwEntries, pw)
-		return
-	}
-
-	if *getService != "" {
-		fmt.Println(pwEntries[*getService])
-		return
-	}
+	return -1
 }
 
-type PasswordEntry struct {
-	Service, Password, Meta string
-}
-
-func printHelp() {
-	// write man.txt to console
-	manual, err := ioutil.ReadFile("man.txt")
-	ergo.CheckNil(err)
-	fmt.Println(string(manual))
-}
-
-func promptForPassword() (password string) {
-	password, err := gopass.GetPass("Password: ")
-	ergo.CheckNil(err)
+func (s *Services) Get(name string) (service *Service) {
+	i := s.IndexOf(name)
+	if i >= 0 {
+		service = &s.Services[i]
+	}
 	return
 }
 
-func load(filename, pw string) map[string]string {
-	return decode(decrypt(readFromDisk(filename), pw))
-}
-
-func save(filename string, pwEntries map[string]string, pw string) {
-	writeToDisk(filename, encrypt(encode(pwEntries), pw))
-}
-
-func fileExists(filename string) bool {
-	_, err := os.Stat(filename)
-	return !os.IsNotExist(err)
-}
-
-func encode(data map[string]string) []byte {
-	if data == nil {
-		data = make(map[string]string)
+func (s *Services) Remove(name string) (service *Service) {
+	i := s.IndexOf(name)
+	if i >= 0 {
+		service = &s.Services[i]
+		s.Services = append(s.Services[:i], s.Services[i+1:]...)
 	}
-	j, err := json.Marshal(data)
-	ergo.CheckNil(err)
-	return j
+	return
 }
 
-func decode(data []byte) map[string]string {
-	m := make(map[string]string)
-	err := json.Unmarshal(data, &m)
+func (s *Services) Put(service *Service) {
+	s.Remove(service.Name)
+	s.Services = append(s.Services, *service)
+}
+
+func passwdFileName() string {
+	config, err := loadConfig()
+	gobro.CheckErr(err, "Unable to load config file")
+	return config.PasswdDir + "/.passman"
+}
+
+func loadServices(passwd string) *Services {
+	encrypted, err := ioutil.ReadFile(passwdFileName())
+	gobro.CheckErr(err)
+
+	blockCipher, err := blowfish.NewCipher([]byte(passwd))
+	gobro.CheckErr(err)
+	decrypted := make([]byte, len(encrypted)-8)
+	cipher.NewCFBDecrypter(blockCipher, encrypted[:8]).XORKeyStream(decrypted, encrypted[8:])
+
+	services := new(Services)
+	err = json.NewDecoder(bytes.NewBuffer(decrypted)).Decode(services)
 	if err != nil {
-		fmt.Printf("Could not decode %s\n", data)
-		panic(err)
+		fmt.Fprintln(os.Stderr, "Invalid password")
+		os.Exit(1)
 	}
-	return m
+	return services
 }
 
-func writeToDisk(filename string, data []byte) {
-	err := ioutil.WriteFile(filename, data, 0644)
-	ergo.CheckNil(err)
+func saveServices(passwd string, services *Services) {
+	decryptedBuffer := bytes.NewBuffer(nil)
+	err := json.NewEncoder(decryptedBuffer).Encode(services)
+	gobro.CheckErr(err)
+
+	blockCipher, err := blowfish.NewCipher([]byte(passwd))
+	gobro.CheckErr(err)
+	iv := make([]byte, 8)
+	_, err = rand.Read(iv)
+	gobro.CheckErr(err)
+
+	enc := decryptedBuffer.Bytes()
+	cipher.NewCFBEncrypter(blockCipher, iv).XORKeyStream(enc, enc)
+	buff := bytes.NewBuffer(iv)
+	_, err = buff.Write(enc)
+	gobro.CheckErr(err)
+
+	err = ioutil.WriteFile(passwdFileName(), buff.Bytes(), os.ModePerm)
+	gobro.CheckErr(err)
 }
 
-func readFromDisk(filename string) []byte {
-	data, err := ioutil.ReadFile(filename)
-	ergo.CheckNil(err)
-	return data
+func generatePassword() string {
+	randBytes := make([]byte, 64)
+	rand.Read(randBytes)
+	base64Buffer := new(bytes.Buffer)
+	base64.NewEncoder(base64.StdEncoding, base64Buffer).Write(randBytes)
+	return string(base64Buffer.Bytes()[:24])
 }
 
-// Returns a []byte padded to a multiple of the length specified
-func pad(key []byte, n int) []byte {
-	paddingRequired := (n - (len(key) % n)) % n
-	padding := make([]byte, paddingRequired)
-	return append(key, padding...)
+func add(args []string) {
+	rootPasswd := getPasswd()
+
+	service := new(Service)
+	service.Name = args[0]
+
+	if gobro.Contains(args, "-g") {
+		service.Password = generatePassword()
+	} else {
+		prompt := fmt.Sprintf("Password for %s: ", service.Name)
+		password, err := gopass.GetPass(prompt)
+		gobro.CheckErr(err)
+		service.Password = password
+	}
+
+	services := loadServices(rootPasswd)
+	services.Put(service)
+	saveServices(rootPasswd, services)
 }
 
-func encrypt(plaintext []byte, key string) []byte {
-	paddedKey := pad([]byte(key), 32)[:32]
-
-	block, err := aes.NewCipher(paddedKey)
-	if err != nil {
-		panic(err)
-	}
-
-	plaintext = pad(plaintext, aes.BlockSize)
-	ciphertext := make([]byte, aes.BlockSize+len(plaintext))
-	iv := ciphertext[:aes.BlockSize]
-	if _, err := io.ReadFull(rand.Reader, iv); err != nil {
-		panic(err)
-	}
-
-	mode := cipher.NewCBCEncrypter(block, iv)
-	mode.CryptBlocks(ciphertext[aes.BlockSize:], plaintext)
-
-	return ciphertext
+func initialize(args []string) {
+	saveServices(getPasswd(), new(Services))
 }
 
-func decrypt(ciphertext []byte, key string) []byte {
-	paddedKey := pad([]byte(key), KEY_LENGTH)[:KEY_LENGTH]
-
-	block, err := aes.NewCipher(paddedKey)
-	if err != nil {
-		panic(err)
+func ls(args []string) {
+	services := loadServices(getPasswd())
+	for _, service := range services.Services {
+		fmt.Printf("   %15s:   %-32s   %s\n", service.Name, service.Password, service.Meta)
 	}
+}
 
-	if len(ciphertext) < aes.BlockSize {
-		panic("Unable to decrypt -- ciphertext is too short!")
+func getPasswd() string {
+	passwd, err := gopass.GetPass("Password: ")
+	gobro.CheckErr(err)
+	if passwd == "" {
+		fmt.Fprintln(os.Stderr, "Invalid password")
+		os.Exit(1)
 	}
+	return passwd
+}
 
-	iv := ciphertext[:aes.BlockSize]
-	ciphertext = ciphertext[aes.BlockSize:]
+func rm(args []string) {
+	gobro.CheckArgs(args, 1, "Usage: passman rm <service>")
+	passwd := getPasswd()
+	services := loadServices(passwd)
+	services.Remove(args[0])
+	saveServices(passwd, services)
+}
 
-	stream := cipher.NewCFBDecrypter(block, iv)
-	stream.XORKeyStream(ciphertext, ciphertext)
-
-	return ciphertext
+func main() {
+	gobro.NewCommandMap(configure, add, initialize, ls, rm).Run(os.Args)
 }
