@@ -9,11 +9,12 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/atotto/clipboard"
 	"github.com/seanpont/gobro"
 	"io/ioutil"
 	"os"
 	"os/user"
-	_ "strings"
+	"strings"
 )
 
 // ===== CONFIGURATION =======================================================
@@ -49,21 +50,7 @@ func saveConfig(config *Config) error {
 	return nil
 }
 
-func configure(args []string) {
-	config, err := loadConfig()
-	if err != nil {
-		fmt.Println("Config file not found")
-		config = new(Config)
-	}
-
-	d := gobro.IndexOf(args, "-d")
-	if d >= 0 && len(args) > d {
-		config.PasswdDir = args[d+1]
-	}
-	saveConfig(config)
-}
-
-// ===== PASSWORD MANAGEMENT =================================================
+// ===== SERVICES ============================================================
 
 type Service struct {
 	Name, Password, Meta string
@@ -82,27 +69,39 @@ func (s *Services) IndexOf(name string) int {
 	return -1
 }
 
-func (s *Services) Get(name string) (service *Service) {
+func (s *Services) Get(name string) (service Service) {
 	i := s.IndexOf(name)
 	if i >= 0 {
-		service = &s.Services[i]
+		service = s.Services[i]
 	}
 	return
 }
 
-func (s *Services) Remove(name string) (service *Service) {
+func (s *Services) Remove(name string) (service Service) {
 	i := s.IndexOf(name)
 	if i >= 0 {
-		service = &s.Services[i]
+		service = s.Services[i]
 		s.Services = append(s.Services[:i], s.Services[i+1:]...)
 	}
 	return
 }
 
-func (s *Services) Put(service *Service) {
+func (s *Services) Add(service Service) {
 	s.Remove(service.Name)
-	s.Services = append(s.Services, *service)
+	s.Services = append(s.Services, service)
 }
+
+func (s *Services) Search(prefix string) []Service {
+	matched := make([]Service, 0)
+	for _, service := range s.Services {
+		if strings.HasPrefix(service.Name, prefix) {
+			matched = append(matched, service)
+		}
+	}
+	return matched
+}
+
+// ===== PASSWORD FILE =======================================================
 
 func passwdFileName() string {
 	config, err := loadConfig()
@@ -149,12 +148,44 @@ func saveServices(passwd string, services *Services) {
 	gobro.CheckErr(err)
 }
 
+// ===== HELPERS =============================================================
+
 func generatePassword() string {
 	randBytes := make([]byte, 64)
 	rand.Read(randBytes)
 	base64Buffer := new(bytes.Buffer)
 	base64.NewEncoder(base64.StdEncoding, base64Buffer).Write(randBytes)
 	return string(base64Buffer.Bytes()[:24])
+}
+
+func getPasswd() string {
+	passwd, err := gopass.GetPass("Password: ")
+	gobro.CheckErr(err)
+	if passwd == "" {
+		fmt.Fprintln(os.Stderr, "Invalid password")
+		os.Exit(1)
+	}
+	return passwd
+}
+
+// ===== COMMANDS ============================================================
+
+func configure(args []string) {
+	config, err := loadConfig()
+	if err != nil {
+		fmt.Println("Config file not found")
+		config = new(Config)
+	}
+
+	d := gobro.IndexOf(args, "-d")
+	if d >= 0 && len(args) > d {
+		config.PasswdDir = args[d+1]
+	}
+	saveConfig(config)
+}
+
+func initialize(args []string) {
+	saveServices(getPasswd(), new(Services))
 }
 
 func add(args []string) {
@@ -173,29 +204,18 @@ func add(args []string) {
 	}
 
 	services := loadServices(rootPasswd)
-	services.Put(service)
+	services.Add(*service)
 	saveServices(rootPasswd, services)
-}
-
-func initialize(args []string) {
-	saveServices(getPasswd(), new(Services))
 }
 
 func ls(args []string) {
 	services := loadServices(getPasswd())
+	if len(args) > 0 {
+		services.Services = services.Search(args[0])
+	}
 	for _, service := range services.Services {
-		fmt.Printf("   %15s:   %-32s   %s\n", service.Name, service.Password, service.Meta)
+		fmt.Printf("   %s\n", service.Name)
 	}
-}
-
-func getPasswd() string {
-	passwd, err := gopass.GetPass("Password: ")
-	gobro.CheckErr(err)
-	if passwd == "" {
-		fmt.Fprintln(os.Stderr, "Invalid password")
-		os.Exit(1)
-	}
-	return passwd
 }
 
 func rm(args []string) {
@@ -206,6 +226,24 @@ func rm(args []string) {
 	saveServices(passwd, services)
 }
 
+func cp(args []string) {
+	gobro.CheckArgs(args, 1, "Usage: passman cp <service>")
+	services := loadServices(getPasswd())
+	service := services.Get(args[0])
+	if service.Name == "" {
+		clipboard.WriteAll(service.Password)
+	} else {
+		fmt.Printf("'%s' not found\n", args[0])
+	}
+}
+
 func main() {
-	gobro.NewCommandMap(configure, add, initialize, ls, rm).Run(os.Args)
+	cm := gobro.NewCommandMap()
+	cm.Add("config", configure, "Configure the password manager")
+	cm.Add("init", initialize, "Initialize the password manager")
+	cm.Add("add", add, "Add a service")
+	cm.Add("ls", ls, "List services")
+	cm.Add("rm", rm, "Remove a service")
+	cm.Add("cp", cp, "Copy the password for a service to the clipboard")
+	cm.Run(os.Args)
 }

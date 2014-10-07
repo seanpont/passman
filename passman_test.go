@@ -14,24 +14,27 @@ func TestServices(t *testing.T) {
 	assert.Equal(len(services.Services), 0)
 
 	// Addition
-	s1 := Service{Name: "google.com", Password: "asdf1234", Meta: "Personal"}
-	services.Put(&s1)
+	services.Add(Service{Name: "google.com", Password: "asdf1234", Meta: "Personal"})
 	assert.Equal(len(services.Services), 1)
 	assert.Equal(services.Services[0].Name, "google.com")
 
 	// replacement
-	s2 := Service{Name: "google.com", Password: "lkjpoiu"}
-	services.Put(&s2)
+	services.Add(Service{Name: "google.com", Password: "lkjpoiu"})
 	assert.Equal(len(services.Services), 1)
-	assert.Equal(services.Services[0].Password, s2.Password)
+	assert.Equal(services.Services[0].Password, "lkjpoiu")
 
 	// Addition
-	s3 := Service{Name: "facebook.com", Password: "1234"}
-	services.Put(&s3)
+	services.Add(Service{Name: "facebook.com", Password: "1234"})
+	assert.Equal(len(services.Services), 2)
 
 	// another replacement
-	s1.Password = "84824"
-	services.Put(&s1)
-	assert.Equal(services.Get("google.com").Password, s1.Password)
+	services.Add(Service{Name: "google.com", Password: "asghasd"})
+	assert.Equal(services.Get("google.com").Password, "asghasd")
 	assert.Equal(len(services.Services), 2)
+
+	services.Add(Service{Name: "golang.org"})
+	goServices := services.Search("go")
+	assert.Equal(len(goServices), 2)
+	assert.True(goServices[0].Name[:2] == "go", "Service 0 begins with go")
+	assert.True(goServices[1].Name[:2] == "go", "Service 1 begins with go")
 }
