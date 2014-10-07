@@ -37,4 +37,5 @@ func TestServices(t *testing.T) {
 	assert.Equal(len(goServices), 2)
 	assert.True(goServices[0].Name[:2] == "go", "Service 0 begins with go")
 	assert.True(goServices[1].Name[:2] == "go", "Service 1 begins with go")
+	assert.Equal(len(services.Search("*")), 3)
 }

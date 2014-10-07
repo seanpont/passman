@@ -14,6 +14,7 @@ import (
 	"io/ioutil"
 	"os"
 	"os/user"
+	"sort"
 	"strings"
 )
 
@@ -60,6 +61,22 @@ type Services struct {
 	Services []Service
 }
 
+// ----- sort.Interface ------------------------------------------------------
+
+func (s *Services) Len() int {
+	return len(s.Services)
+}
+
+func (s *Services) Less(i, j int) bool {
+	return s.Services[i].Name < s.Services[j].Name
+}
+
+func (s *Services) Swap(i, j int) {
+	s.Services[i], s.Services[j] = s.Services[j], s.Services[i]
+}
+
+// ----- OPERATIONS ----------------------------------------------------------
+
 func (s *Services) IndexOf(name string) int {
 	for i, service := range s.Services {
 		if service.Name == name {
@@ -92,6 +109,7 @@ func (s *Services) Add(service Service) {
 }
 
 func (s *Services) Search(prefix string) []Service {
+	prefix = strings.TrimSuffix(prefix, "*")
 	matched := make([]Service, 0)
 	for _, service := range s.Services {
 		if strings.HasPrefix(service.Name, prefix) {
@@ -128,6 +146,7 @@ func loadServices(passwd string) *Services {
 }
 
 func saveServices(passwd string, services *Services) {
+	sort.Sort(services)
 	decryptedBuffer := bytes.NewBuffer(nil)
 	err := json.NewEncoder(decryptedBuffer).Encode(services)
 	gobro.CheckErr(err)
@@ -158,14 +177,19 @@ func generatePassword() string {
 	return string(base64Buffer.Bytes()[:24])
 }
 
+var passwd *string
+
 func getPasswd() string {
-	passwd, err := gopass.GetPass("Password: ")
-	gobro.CheckErr(err)
-	if passwd == "" {
-		fmt.Fprintln(os.Stderr, "Invalid password")
-		os.Exit(1)
+	if passwd == nil {
+		pw, err := gopass.GetPass("Password: ")
+		gobro.CheckErr(err)
+		if pw == "" {
+			fmt.Fprintln(os.Stderr, "Invalid password")
+			os.Exit(1)
+		}
+		passwd = &pw
 	}
-	return passwd
+	return *passwd
 }
 
 // ===== COMMANDS ============================================================
@@ -189,7 +213,10 @@ func initialize(args []string) {
 }
 
 func add(args []string) {
-	rootPasswd := getPasswd()
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "Usage: passman add <service> [<options>]\n  -g: Generate password")
+		return
+	}
 
 	service := new(Service)
 	service.Name = args[0]
@@ -203,9 +230,9 @@ func add(args []string) {
 		service.Password = password
 	}
 
-	services := loadServices(rootPasswd)
+	services := loadServices(getPasswd())
 	services.Add(*service)
-	saveServices(rootPasswd, services)
+	saveServices(getPasswd(), services)
 }
 
 func ls(args []string) {
@@ -218,22 +245,68 @@ func ls(args []string) {
 	}
 }
 
+func show(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "Usage: passman show <service>")
+		return
+	}
+
+	services := loadServices(getPasswd())
+	for _, service := range services.Search(args[0]) {
+		fmt.Printf("   %-20s:   %-60s %s\n", service.Name, service.Password, service.Meta)
+	}
+	fmt.Println("")
+}
+
 func rm(args []string) {
-	gobro.CheckArgs(args, 1, "Usage: passman rm <service>")
-	passwd := getPasswd()
-	services := loadServices(passwd)
-	services.Remove(args[0])
-	saveServices(passwd, services)
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "Usage: passman rm <services>")
+		return
+	}
+	services := loadServices(getPasswd())
+	for _, name := range args {
+		services.Remove(name)
+	}
+	saveServices(getPasswd(), services)
 }
 
 func cp(args []string) {
-	gobro.CheckArgs(args, 1, "Usage: passman cp <service>")
+	if len(args) != 1 {
+		fmt.Fprintln(os.Stderr, "Usage: passman cp <service>")
+		return
+	}
 	services := loadServices(getPasswd())
 	service := services.Get(args[0])
-	if service.Name == "" {
+	if service.Name != "" {
 		clipboard.WriteAll(service.Password)
 	} else {
 		fmt.Printf("'%s' not found\n", args[0])
+	}
+}
+
+func interactive(args []string) {
+	cm := gobro.NewCommandMap()
+	cm.Add("config", configure, "Configure the password manager")
+	cm.Add("init", initialize, "Initialize the password manager")
+	cm.Add("add", add, "Add a service")
+	cm.Add("ls", ls, "List services")
+	cm.Add("show", show, "Show password for a service")
+	cm.Add("rm", rm, "Remove a service")
+	cm.Add("cp", cp, "Copy the password for a service to the clipboard")
+
+	loadServices(getPasswd())
+	for {
+		cmd, err := gobro.Prompt("passman$ ")
+		if err != nil {
+			return
+		}
+		if cmd == "" {
+			continue
+		}
+		args := make([]string, 0, 3)
+		args = append(args, "passman")
+		args = append(args, strings.Split(cmd, " ")...)
+		cm.Run(args)
 	}
 }
 
@@ -243,7 +316,9 @@ func main() {
 	cm.Add("init", initialize, "Initialize the password manager")
 	cm.Add("add", add, "Add a service")
 	cm.Add("ls", ls, "List services")
+	cm.Add("show", show, "Show password for a service")
 	cm.Add("rm", rm, "Remove a service")
 	cm.Add("cp", cp, "Copy the password for a service to the clipboard")
+	cm.Add("i", interactive, "Interactive mode (good for adding lots of passwords)")
 	cm.Run(os.Args)
 }
