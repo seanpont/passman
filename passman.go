@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/atotto/clipboard"
 	"github.com/seanpont/gobro"
@@ -21,7 +22,7 @@ import (
 // ===== CONFIGURATION =======================================================
 
 type Config struct {
-	PasswdDir string
+	PasswdFile string
 }
 
 func configFileName() string {
@@ -30,18 +31,17 @@ func configFileName() string {
 	return u.HomeDir + "/.passman-config"
 }
 
-func loadConfig() (*Config, error) {
+func loadConfig() (config Config, err error) {
 	configFile, err := os.Open(configFileName())
 	if err != nil {
-		return nil, err
+		return
 	}
 	defer configFile.Close()
-	var config Config
 	err = json.NewDecoder(configFile).Decode(&config)
-	return &config, err
+	return
 }
 
-func saveConfig(config *Config) error {
+func saveConfig(config Config) error {
 	configFile, err := os.Create(configFileName())
 	if err != nil {
 		return err
@@ -124,25 +124,33 @@ func (s *Services) Search(prefix string) []Service {
 func passwdFileName() string {
 	config, err := loadConfig()
 	gobro.CheckErr(err, "Unable to load config file")
-	return config.PasswdDir + "/.passman"
+	if config.PasswdFile == "" {
+		fmt.Fprintln(os.Stderr, "The config file is missing or malformed.")
+		os.Exit(1)
+	}
+	return config.PasswdFile
 }
 
-func loadServices(passwd string) *Services {
-	encrypted, err := ioutil.ReadFile(passwdFileName())
-	gobro.CheckErr(err)
+func loadServices(passwd string) (*Services, error) {
+	base64Enc, err := ioutil.ReadFile(passwdFileName())
+	if err != nil {
+		return nil, err
+	}
+
+	enc := make([]byte, base64.StdEncoding.DecodedLen(len(base64Enc)))
+	base64.StdEncoding.Decode(enc, base64Enc)
 
 	blockCipher, err := blowfish.NewCipher([]byte(passwd))
 	gobro.CheckErr(err)
-	decrypted := make([]byte, len(encrypted)-8)
-	cipher.NewCFBDecrypter(blockCipher, encrypted[:8]).XORKeyStream(decrypted, encrypted[8:])
+	decrypted := make([]byte, len(enc)-8)
+	cipher.NewCFBDecrypter(blockCipher, enc[:8]).XORKeyStream(decrypted, enc[8:])
 
 	services := new(Services)
 	err = json.NewDecoder(bytes.NewBuffer(decrypted)).Decode(services)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "Invalid password")
-		os.Exit(1)
+		return nil, errors.New("Invalid password")
 	}
-	return services
+	return services, nil
 }
 
 func saveServices(passwd string, services *Services) {
@@ -163,7 +171,12 @@ func saveServices(passwd string, services *Services) {
 	_, err = buff.Write(enc)
 	gobro.CheckErr(err)
 
-	err = ioutil.WriteFile(passwdFileName(), buff.Bytes(), os.ModePerm)
+	enc = append(iv, enc...)
+	base64EncodedLen := base64.StdEncoding.EncodedLen(len(enc))
+	base64Enc := make([]byte, base64EncodedLen)
+	base64.StdEncoding.Encode(base64Enc, enc)
+
+	err = ioutil.WriteFile(passwdFileName(), base64Enc, os.ModePerm)
 	gobro.CheckErr(err)
 }
 
@@ -194,49 +207,78 @@ func getPasswd() string {
 
 // ===== COMMANDS ============================================================
 
+func initialize(args []string) {
+	_, err := loadConfig()
+	if err != nil {
+		u, err := user.Current()
+		gobro.CheckErr(err)
+		saveConfig(Config{PasswdFile: u.HomeDir + "/.passman"})
+	}
+	services, err := loadServices(getPasswd())
+	if err == nil && services != nil && services.Len() > 0 {
+		overwrite, err := gobro.Prompt("   Overwrite existing password file? (y/N): ")
+		if err != nil || strings.ToLower(overwrite) != "y" {
+			return
+		}
+	}
+	saveServices(getPasswd(), new(Services))
+	_, err = loadServices(getPasswd()) // just to test that we have saved it properly
+	gobro.CheckErr(err, "Unable to read password file")
+}
+
 func configure(args []string) {
 	config, err := loadConfig()
 	if err != nil {
-		fmt.Println("Config file not found")
-		config = new(Config)
+		fmt.Println("Config file not found. Please initialize first.")
+		return
 	}
 
 	d := gobro.IndexOf(args, "-d")
 	if d >= 0 && len(args) > d {
-		config.PasswdDir = args[d+1]
+		config.PasswdFile = args[d+1]
 	}
 	saveConfig(config)
-}
 
-func initialize(args []string) {
-	saveServices(getPasswd(), new(Services))
+	fmt.Println(config.PasswdFile)
 }
 
 func add(args []string) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: passman add <service> [<options>]\n  -g: Generate password")
+		fmt.Fprintln(os.Stderr, "Usage: passman add <service> [<options>]\n"+
+			"  -g: Generate password\n  "+
+			"  -p: Enter password\n  "+
+			"  -m: attach metadata\n")
 		return
 	}
 
-	service := new(Service)
-	service.Name = args[0]
+	name := args[0]
+	services, err := loadServices(getPasswd())
+	gobro.CheckErr(err, "Password invalid")
+	service := services.Get(name)
+	service.Name = name
 
 	if gobro.Contains(args, "-g") {
 		service.Password = generatePassword()
-	} else {
-		prompt := fmt.Sprintf("Password for %s: ", service.Name)
+	}
+
+	if gobro.Contains(args, "-p") {
+		prompt := fmt.Sprintf("   Password for %s: ", service.Name)
 		password, err := gopass.GetPass(prompt)
 		gobro.CheckErr(err)
 		service.Password = password
 	}
 
-	services := loadServices(getPasswd())
-	services.Add(*service)
+	if gobro.Contains(args, "-m") {
+		service.Meta, _ = gobro.Prompt(fmt.Sprintf("   Meta for %s: ", service.Name))
+	}
+
+	services.Add(service)
 	saveServices(getPasswd(), services)
 }
 
 func ls(args []string) {
-	services := loadServices(getPasswd())
+	services, err := loadServices(getPasswd())
+	gobro.CheckErr(err, "Password invalid")
 	if len(args) > 0 {
 		services.Services = services.Search(args[0])
 	}
@@ -246,14 +288,15 @@ func ls(args []string) {
 }
 
 func show(args []string) {
-	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: passman show <service>")
-		return
+	prefix := ""
+	if len(args) > 0 {
+		prefix = args[0]
 	}
 
-	services := loadServices(getPasswd())
-	for _, service := range services.Search(args[0]) {
-		fmt.Printf("   %-20s:   %-60s %s\n", service.Name, service.Password, service.Meta)
+	services, err := loadServices(getPasswd())
+	gobro.CheckErr(err, "Password invalid")
+	for _, service := range services.Search(prefix) {
+		fmt.Printf("   %20s:   %s   %s\n", service.Name, service.Password, service.Meta)
 	}
 	fmt.Println("")
 }
@@ -263,7 +306,8 @@ func rm(args []string) {
 		fmt.Fprintln(os.Stderr, "Usage: passman rm <services>")
 		return
 	}
-	services := loadServices(getPasswd())
+	services, err := loadServices(getPasswd())
+	gobro.CheckErr(err, "Password invalid")
 	for _, name := range args {
 		services.Remove(name)
 	}
@@ -275,7 +319,8 @@ func cp(args []string) {
 		fmt.Fprintln(os.Stderr, "Usage: passman cp <service>")
 		return
 	}
-	services := loadServices(getPasswd())
+	services, err := loadServices(getPasswd())
+	gobro.CheckErr(err, "Password invalid")
 	service := services.Get(args[0])
 	if service.Name != "" {
 		clipboard.WriteAll(service.Password)
@@ -284,7 +329,38 @@ func cp(args []string) {
 	}
 }
 
-func interactive(args []string) {
+func changePassword(args []string) {
+	if passwd == nil {
+		pw, err := gopass.GetPass("   Current password: ")
+		gobro.CheckErr(err)
+		if pw == "" {
+			fmt.Fprintln(os.Stderr, "Invalid password")
+			return
+		}
+	}
+	services, err := loadServices(getPasswd())
+	gobro.CheckErr(err, "Password invalid")
+	pw2, err := gopass.GetPass("   New Password: ")
+	gobro.CheckErr(err)
+	if pw2 == "" {
+		fmt.Fprintln(os.Stderr, "Invalid password")
+		return
+	}
+	pw3, err := gopass.GetPass("   Repeat Password: ")
+	gobro.CheckErr(err)
+	if pw3 == "" {
+		fmt.Fprintln(os.Stderr, "Invalid password")
+		return
+	}
+	if pw2 != pw3 {
+		fmt.Fprintln(os.Stderr, "Passwords don't match")
+		return
+	}
+	saveServices(pw2, services)
+	passwd = &pw2
+}
+
+func commandMap() *gobro.CommandMap {
 	cm := gobro.NewCommandMap()
 	cm.Add("config", configure, "Configure the password manager")
 	cm.Add("init", initialize, "Initialize the password manager")
@@ -293,8 +369,14 @@ func interactive(args []string) {
 	cm.Add("show", show, "Show password for a service")
 	cm.Add("rm", rm, "Remove a service")
 	cm.Add("cp", cp, "Copy the password for a service to the clipboard")
+	cm.Add("repass", changePassword, "Change the encryption password")
+	return cm
+}
 
-	loadServices(getPasswd())
+func interactive(args []string) {
+	cm := commandMap()
+	_, err := loadServices(getPasswd())
+	gobro.CheckErr(err, "Password invalid")
 	for {
 		cmd, err := gobro.Prompt("passman$ ")
 		if err != nil {
@@ -311,14 +393,7 @@ func interactive(args []string) {
 }
 
 func main() {
-	cm := gobro.NewCommandMap()
-	cm.Add("config", configure, "Configure the password manager")
-	cm.Add("init", initialize, "Initialize the password manager")
-	cm.Add("add", add, "Add a service")
-	cm.Add("ls", ls, "List services")
-	cm.Add("show", show, "Show password for a service")
-	cm.Add("rm", rm, "Remove a service")
-	cm.Add("cp", cp, "Copy the password for a service to the clipboard")
+	cm := commandMap()
 	cm.Add("i", interactive, "Interactive mode (good for adding lots of passwords)")
 	cm.Run(os.Args)
 }
