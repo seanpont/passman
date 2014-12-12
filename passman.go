@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"github.com/atotto/clipboard"
 	"github.com/seanpont/gobro"
+	"github.com/seanpont/gobro/commander"
+	"github.com/seanpont/gobro/strarr"
 	"io/ioutil"
 	"os"
 	"os/user"
@@ -182,14 +184,6 @@ func saveServices(passwd string, services *Services) {
 
 // ===== HELPERS =============================================================
 
-func generatePassword() string {
-	randBytes := make([]byte, 64)
-	rand.Read(randBytes)
-	base64Buffer := new(bytes.Buffer)
-	base64.NewEncoder(base64.StdEncoding, base64Buffer).Write(randBytes)
-	return string(base64Buffer.Bytes()[:24])
-}
-
 var passwd *string
 
 func getPasswd() string {
@@ -216,7 +210,7 @@ func initialize(args []string) {
 	}
 	services, err := loadServices(getPasswd())
 	if err == nil && services != nil && services.Len() > 0 {
-		overwrite, err := gobro.Prompt("   Overwrite existing password file? (y/N): ")
+		overwrite, err := commander.Prompt("   Overwrite existing password file? (y/N): ")
 		if err != nil || strings.ToLower(overwrite) != "y" {
 			return
 		}
@@ -233,7 +227,7 @@ func configure(args []string) {
 		return
 	}
 
-	d := gobro.IndexOf(args, "-d")
+	d := strarr.IndexOf(args, "-d")
 	if d >= 0 && len(args) > d {
 		config.PasswdFile = args[d+1]
 	}
@@ -246,6 +240,15 @@ func add(args []string) {
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "Usage: passman add <service> [<options>]\n"+
 			"  -g: Generate password\n  "+
+			"    Additional options:\n"+
+			"      l: include lowercase characters\n"+
+			"      u: include uppercase characters\n"+
+			"      n: include numbers\n"+
+			"      c: include special characters\n"+
+			"      w: generate a password using random words from the dictionary\n"+
+			"      \\d+$: password must be at least this long."+
+			"      example: add -glun24 will produce a password using, lowercase, characters,\n"+
+			"      uppercase characters, and numbers, and will be 24 characters long"+
 			"  -p: Enter password\n  "+
 			"  -m: attach metadata\n")
 		return
@@ -257,19 +260,20 @@ func add(args []string) {
 	service := services.Get(name)
 	service.Name = name
 
-	if gobro.Contains(args, "-g") {
-		service.Password = generatePassword()
+	generateParams, _ := strarr.FindMatchWithRegex(args, "-g.*")
+	if generateParams != "" {
+		service.Password = NewPasswordGenerator(generateParams).generate()
 	}
 
-	if gobro.Contains(args, "-p") {
+	if strarr.Contains(args, "-p") {
 		prompt := fmt.Sprintf("   Password for %s: ", service.Name)
 		password, err := gopass.GetPass(prompt)
 		gobro.CheckErr(err)
 		service.Password = password
 	}
 
-	if gobro.Contains(args, "-m") {
-		service.Meta, _ = gobro.Prompt(fmt.Sprintf("   Meta for %s: ", service.Name))
+	if strarr.Contains(args, "-m") {
+		service.Meta, _ = commander.Prompt(fmt.Sprintf("   Meta for %s: ", service.Name))
 	}
 
 	services.Add(service)
@@ -360,8 +364,8 @@ func changePassword(args []string) {
 	passwd = &pw2
 }
 
-func commandMap() *gobro.CommandMap {
-	cm := gobro.NewCommandMap()
+func commandMap() *commander.CommandMap {
+	cm := commander.NewCommandMap()
 	cm.Add("config", configure, "Configure the password manager")
 	cm.Add("init", initialize, "Initialize the password manager")
 	cm.Add("add", add, "Add a service")
@@ -378,7 +382,7 @@ func interactive(args []string) {
 	_, err := loadServices(getPasswd())
 	gobro.CheckErr(err, "Password invalid")
 	for {
-		cmd, err := gobro.Prompt("passman$ ")
+		cmd, err := commander.Prompt("passman$ ")
 		if err != nil {
 			return
 		}

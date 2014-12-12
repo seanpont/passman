@@ -1,10 +1,8 @@
 package main
 
 import (
-	_ "bytes"
-	_ "fmt"
 	"github.com/seanpont/assert"
-	_ "io/ioutil"
+	"strings"
 	"testing"
 )
 
@@ -38,4 +36,25 @@ func TestServices(t *testing.T) {
 	assert.True(goServices[0].Name[:2] == "go", "Service 0 begins with go")
 	assert.True(goServices[1].Name[:2] == "go", "Service 1 begins with go")
 	assert.Equal(len(services.Search("*")), 3)
+}
+
+func TestPasswordGeneration(t *testing.T) {
+	assert := assert.Assert(t)
+	generator := NewPasswordGenerator("lunc20")
+	assert.Equal(generator.length, 20)
+	password := generator.generate()
+	assert.Equal(len(password), 20)
+	assert.True(strings.ContainsAny(password, LOWERCASE), "missing characters")
+	assert.True(strings.ContainsAny(password, UPPERCASE), "missing characters")
+	assert.True(strings.ContainsAny(password, NUMBERS), "missing characters")
+	assert.True(strings.ContainsAny(password, CHARACTERS), "missing characters")
+}
+
+func TestPasswordGenerationWithWords(t *testing.T) {
+	assert := assert.Assert(t)
+	generator := NewPasswordGenerator("w24")
+	assert.Equal(generator.length, 24)
+	assert.Equal(generator.words, true)
+	password := generator.generate()
+	assert.True(len(password) >= 24, "length")
 }
