@@ -364,6 +364,11 @@ func changePassword(args []string) {
 	passwd = &pw2
 }
 
+func exit(args []string) {
+	fmt.Println("Goodbye")
+	os.Exit(0)
+}
+
 func commandMap() *commander.CommandMap {
 	cm := commander.NewCommandMap()
 	cm.Add("config", configure, "Configure the password manager")
@@ -374,6 +379,7 @@ func commandMap() *commander.CommandMap {
 	cm.Add("rm", rm, "Remove a service")
 	cm.Add("cp", cp, "Copy the password for a service to the clipboard")
 	cm.Add("repass", changePassword, "Change the encryption password")
+	cm.Add("exit", exit, "Exit")
 	return cm
 }
 
